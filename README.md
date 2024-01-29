@@ -6,8 +6,22 @@ An API to store configurations for other services
 
 ### Create the database
 
+From a console of a Mysql server run:
+
 ```
 create database celestial_tenant
+```
+
+Add your database configuration to app.conf
+
+Example of my local configuration:
+
+```
+schema = celestial_tenant
+dbHost = localhost
+dbUser = root
+dbPort = 3306
+dbPass = root
 ```
 
 ### Start the web server:
