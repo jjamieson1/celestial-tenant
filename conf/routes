@@ -9,6 +9,7 @@ module:testrunner
 
 GET     /                                       App.Index
 GET /api/v1/configuration/tenant                Api.GetTenantById 
+GET /api/v1/configuration/tenant/:tenantId      Api.GetTenantDetails
 POST /api/v1/configuration/tenant               Api.AddTenant
 GET /api/v1/configuration/url/:requestUrl      Api.GetTenantByUrl
 

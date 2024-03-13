@@ -3,9 +3,12 @@ package controllers
 import (
 	"celestial-tenant/services"
 	"errors"
+	"fmt"
 	"strings"
 
+	userClient "github.com/jjamieson1/celestial-sdk/clients/user"
 	"github.com/jjamieson1/celestial-sdk/models"
+	"github.com/jjamieson1/celestial-sdk/utilities"
 	"github.com/revel/revel"
 )
 
@@ -72,8 +75,35 @@ func (c Api) GetTenantById() revel.Result {
 	return c.RenderJSON(tenant)
 }
 
+func (c Api) GetTenantDetails(tenantId string) revel.Result {
+	jwt := utilities.HandelHeaderJWT(c.Controller)
+	if c.Validation.HasErrors() {
+		return utilities.HandleValidationError(c.Validation.Errors, 403, c.Controller)
+	}
+	revel.AppLog.Debugf("jwt found to be: %v", jwt)
+	user, status, err := userClient.GetAccount(jwt, tenantId)
+	if status != 200 {
+		return utilities.HandleInternalError("authentication", fmt.Sprintf("http status %v", status), 500, c.Controller)
+	}
+
+	if err != nil {
+		return utilities.HandleInternalError("tenantId", err.Error(), 500, c.Controller)
+	}
+
+	if !utilities.IsAdmin(user.Roles) {
+		return utilities.HandleAuthorizationError("role", "missing required admin role", 401, c.Controller)
+	}
+
+	tenant, err := services.GetTenantDetailsByTenantId(tenantId)
+	if err != nil {
+		return utilities.HandleInternalError("tenant Service", err.Error(), 500, c.Controller)
+	}
+
+	return c.RenderJSON(tenant)
+}
+
 func (c Api) GetTenants() revel.Result {
-	revel.AppLog.Debug("requesting al tenants")
+	revel.AppLog.Debug("requesting all tenants")
 
 	tenant, err := services.GetTenants()
 	if err != nil {

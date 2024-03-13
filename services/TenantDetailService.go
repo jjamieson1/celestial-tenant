@@ -13,11 +13,15 @@ import (
 )
 
 func AddUpdateTenantDetails(tenantId string, tenant models.Tenant) (models.Tenant, error) {
-	userId := "jamie"
+	// Assuming userId is static for this function
+	userID := "jamie"
+	var query string
+	var operation string
+
 	if tenantId == "" {
 		tenant.TenantId = uuid.New().String()
-
-		query := `INSERT INTO tenant (
+		operation = "adding new"
+		query = `INSERT INTO tenant (
 					tenant_id,
 					parent_tenant_id,
  					url, 
@@ -26,32 +30,64 @@ func AddUpdateTenantDetails(tenantId string, tenant models.Tenant) (models.Tenan
  					is_available,
 					created_by)
 				VALUES (?,?,?,?,?,?,?)`
+	} else {
+		operation = "updating"
+		query = `UPDATE tenant_details SET 
+						parent_tenant_id=?,
+						url=?, 
+						common_name=?, 
+						primary_logo_url=?,
+						is_available=?
+						WHERE tenant_id=?`
+	}
 
-		revel.AppLog.Infof("adding new tenant  (tenantId: %v)", tenant.TenantId)
+	revel.AppLog.Infof("%s tenant (tenantId: %v)", operation, tenant.TenantId)
 
-		stmt, err := app.DB.Prepare(query)
-		if err != nil {
-			error := fmt.Sprintf("error performing query: %v, error: %v", query, err.Error())
-			revel.AppLog.Errorf(error)
-			return tenant, errors.New(error)
-		}
-		defer stmt.Close()
+	stmt, err := app.DB.Prepare(query)
+	if err != nil {
+		errorMsg := fmt.Sprintf("error preparing query: %v, error: %v", query, err.Error())
+		revel.AppLog.Errorf(errorMsg)
+		return tenant, errors.New(errorMsg)
+	}
+	defer stmt.Close()
 
-		_, err = stmt.Exec(
+	var execResult sql.Result
+	if tenantId == "" {
+		execResult, err = stmt.Exec(
 			tenant.TenantId,
 			tenant.ParentTenantId,
 			tenant.Url,
 			tenant.CommonName,
 			tenant.LogoUrl,
 			tenant.IsAvailable,
-			userId,
+			userID,
 		)
-		if err != nil {
-			error := fmt.Sprintf("error performing query: %v, error: %v", query, err.Error())
-			revel.AppLog.Errorf(error)
-			return tenant, errors.New(error)
-		}
+	} else {
+		execResult, err = stmt.Exec(
+			tenant.ParentTenantId,
+			tenant.Url,
+			tenant.CommonName,
+			tenant.LogoUrl,
+			tenant.IsAvailable,
+			tenantId,
+		)
+	}
+	if err != nil {
+		errorMsg := fmt.Sprintf("error performing query: %v, error: %v", query, err.Error())
+		revel.AppLog.Errorf(errorMsg)
+		return tenant, errors.New(errorMsg)
+	}
 
+	rowsAffected, err := execResult.RowsAffected()
+	if err != nil {
+		return tenant, fmt.Errorf("error getting rows affected: %v", err)
+	}
+
+	if rowsAffected == 0 {
+		revel.AppLog.Infof("No rows affected for %s operation", operation)
+	}
+
+	if tenantId == "" {
 		for _, tenantType := range tenant.TenantTypes {
 			err = AddTenantTypeToTenant(tenantType.Id, tenant.TenantId)
 			if err != nil {
@@ -69,51 +105,39 @@ func AddUpdateTenantDetails(tenantId string, tenant models.Tenant) (models.Tenan
 		tenant.SecretKeys.AppKey = tenant.TenantId
 		tenant.SecretKeys.ApiKey = apiKey
 		tenant.TenantTypes = t
+	}
+	return tenant, nil
+}
+func GetTenantDetailsByTenantId(tenantId string) (tenant models.Tenant, err error) {
 
+	query := `SELECT tenant_id, parent_tenant_id, url, common_name, logo_primary_url, is_available  
+				FROM  tenant WHERE tenant_id = ?`
+
+	err = app.DB.QueryRow(query, tenantId).Scan(
+		&tenant.TenantId,
+		&tenant.ParentTenantId,
+		&tenant.Url,
+		&tenant.CommonName,
+		&tenant.LogoUrl,
+		&tenant.IsAvailable,
+	)
+
+	if err != nil && err != sql.ErrNoRows {
+		error := fmt.Sprint(err.Error())
+		revel.AppLog.Errorf(error)
+		return tenant, errors.New(error)
+	} else if err == sql.ErrNoRows {
+		e := fmt.Errorf("unable to find tenant with those credentials (tenantId: %s)", tenantId)
+		revel.AppLog.Info(e.Error())
+		return tenant, e
 	} else {
-		query := `UPDATE tenant_details SET 
-						parent_tenant_id,
-						url=?, 
-						common_name=?, 
-						primary_logo_url=?,
-						is_available=?
-						WHERE tenant_id=?`
-
-		revel.AppLog.Infof("updating tenantId: %v, with parent tenantId: %v", tenantId, tenant.ParentTenantId)
-
-		stmt, err := app.DB.Prepare(query)
-		if err != nil {
-			error := fmt.Sprintf("error performing query: %v, error: %v", query, err.Error())
-			revel.AppLog.Errorf(error)
-			return tenant, errors.New(error)
-		}
-		defer stmt.Close()
-
-		_, err = stmt.Exec(
-			tenant.ParentTenantId,
-			tenant.Url,
-			tenant.CommonName,
-			tenant.LogoUrl,
-			tenant.IsAvailable,
-			tenant.TenantId,
-		)
-		if err != nil && err != sql.ErrNoRows {
-			error := fmt.Sprint(err.Error())
-			revel.AppLog.Errorf(error)
-			return tenant, errors.New(error)
-		} else if err == sql.ErrNoRows {
-			error := fmt.Sprint(err.Error())
-			revel.AppLog.Info(error)
-			return tenant, sql.ErrNoRows
-		} else {
-			revel.AppLog.Debugf("updated/added tenant_details for tenantId: %v ", tenantId)
-		}
+		revel.AppLog.Debugf("retrieved tenant_details for tenantId: %v ", tenant.TenantId)
 	}
 
-	return tenant, nil
-
+	tenant.TenantTypes, err = GetTenantTypesByTenantId(tenant.TenantId)
+	tenant.ServiceProviders, _ = getServiceProviderData(tenant.TenantId)
+	return tenant, err
 }
-
 func GetTenantDetails(apiKey, appKey string) (models.Tenant, error) {
 	var tenant models.Tenant
 	revel.AppLog.Infof("retrieving tenant  (appKey: %v)", appKey)
@@ -136,16 +160,15 @@ func GetTenantDetails(apiKey, appKey string) (models.Tenant, error) {
 		revel.AppLog.Errorf(error)
 		return tenant, errors.New(error)
 	} else if err == sql.ErrNoRows {
-		e := errors.New(fmt.Sprintf("unable to find tenant with those credentials (AppKey: %s, ApiKey: %s)", appKey, apiKey))
+		e := fmt.Errorf("unable to find tenant with those credentials (AppKey: %s, ApiKey: %s)", appKey, apiKey)
 		revel.AppLog.Info(e.Error())
 		return tenant, e
 	} else {
 		revel.AppLog.Debugf("retrieved tenant_details for tenantId: %v ", tenant.TenantId)
 	}
-	// tenant.SecretKeys.ApiKey = ``
-	// tenant.SecretKeys.AppKey = tenant.TenantId
-	tenant.TenantTypes, err = GetTenantTypesByTenantId(tenant.TenantId)
 
+	tenant.TenantTypes, err = GetTenantTypesByTenantId(tenant.TenantId)
+	tenant.ServiceProviders, _ = getServiceProviderData(tenant.TenantId)
 	return tenant, err
 
 }
@@ -201,18 +224,15 @@ func GetAllTenantChildrenDetails(tenantId string) ([]models.Tenant, error) {
 
 	stmt, err := app.DB.Prepare(query)
 	if err != nil {
-		error := fmt.Sprintf("error preparing query: %v, error: %v", query, err.Error())
-		revel.AppLog.Errorf(error)
-		return tenants, errors.New(error)
+		return nil, fmt.Errorf("error preparing query: %v", err)
 	}
+	defer stmt.Close()
 
 	results, err := stmt.Query(tenantId)
 	if err != nil {
-		error := fmt.Sprintf("error performing query: %v, error: %v", query, err.Error())
-		revel.AppLog.Errorf(error)
-		return tenants, errors.New(error)
+		return nil, fmt.Errorf("error performing query: %v", err)
 	}
-	defer stmt.Close()
+	defer results.Close()
 
 	for results.Next() {
 		err := results.Scan(
@@ -224,15 +244,11 @@ func GetAllTenantChildrenDetails(tenantId string) ([]models.Tenant, error) {
 			&tenant.IsAvailable,
 		)
 		if err != nil {
-			error := fmt.Sprintf("error mapping query to model: %v, error: %v", query, err.Error())
-			revel.AppLog.Errorf(error)
-			return tenants, errors.New(error)
+			return tenants, fmt.Errorf("error mapping query to model: %v", err)
 		}
 		tenants = append(tenants, tenant)
 	}
-
-	return tenants, err
-
+	return tenants, nil
 }
 
 func GetTenantIdByUrl(url string) (string, error) {
@@ -377,6 +393,45 @@ func GetTenantTypesByTenantId(tenantId string) ([]models.TenantType, error) {
 		tenantTypes = append(tenantTypes, tenantType)
 	}
 	return tenantTypes, err
+}
+
+func getServiceProviderData(tenantId string) (serviceProviders []models.ServiceProviders, err error) {
+	q := `SELECT sptd.id, sptd.URL, sp.id, sp.name FROM service_provider_tenant_data AS sptd 
+			JOIN service_provider AS sp ON sptd.service_provider_id = sp.id 
+			WHERE sptd.tenant_id = ?`
+	stmt, err := app.DB.Prepare(q)
+	if err != nil {
+		error := fmt.Sprintf("error performing query: %v, error: %v", q, err.Error())
+		revel.AppLog.Errorf(error)
+		return serviceProviders, errors.New(error)
+	}
+	defer stmt.Close()
+
+	results, err := stmt.Query(tenantId)
+	if err != nil {
+		error := fmt.Sprintf("error performing query: %v, error: %v", q, err.Error())
+		revel.AppLog.Errorf(error)
+		return serviceProviders, errors.New(error)
+	}
+
+	var sp models.ServiceProviders
+
+	for results.Next() {
+		err := results.Scan(
+			&sp.Id,
+			&sp.BaseURL,
+			&sp.ServiceProvider.Id,
+			&sp.ServiceProvider.Name,
+		)
+		if err != nil {
+			error := fmt.Sprintf("error mapping query to model: %v, error: %v", q, err.Error())
+			revel.AppLog.Errorf(error)
+			return serviceProviders, errors.New(error)
+		}
+		serviceProviders = append(serviceProviders, sp)
+	}
+
+	return serviceProviders, err
 }
 
 func CreateSecretKeys(tenantId string) (string, error) {
